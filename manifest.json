@@ -1,0 +1,10 @@
+{
+  "id": "vault-sync",
+  "name": "Vault Sync",
+  "version": "1.0.0",
+  "minAppVersion": "1.4.0",
+  "description": "Auto git sync — commit & push on every save",
+  "author": "lkmavi",
+  "authorUrl": "https://github.com/lkmavi",
+  "isDesktopOnly": true
+}

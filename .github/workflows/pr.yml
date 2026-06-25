@@ -1,0 +1,34 @@
+name: PR Check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  author:
+    name: Verify author
+    runs-on: ubuntu-latest
+    steps:
+      - name: Only lkmavi can open PRs
+        if: github.event.pull_request.user.login != 'lkmavi'
+        run: |
+          echo "PRs are only accepted from lkmavi"
+          exit 1
+
+  build:
+    name: Build
+    needs: author
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm install
+      - run: npm run build
+
+      - name: Verify output
+        run: test -f main.js
