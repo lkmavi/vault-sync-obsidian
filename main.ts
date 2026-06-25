@@ -5,6 +5,7 @@ import {
   Plugin,
   PluginSettingTab,
   Setting,
+  SuggestModal,
 } from "obsidian";
 import { execFile } from "child_process";
 
@@ -59,7 +60,7 @@ export default class VaultSync extends Plugin {
     this.ribbonEl = this.addRibbonIcon(
       this.settings.enabled ? "cloud-upload" : "cloud-off",
       "Vault Sync",
-      () => this.toggleEnabled()
+      () => new VaultSyncActionsModal(this.app, this).open()
     );
 
     this.statusBarEl = this.addStatusBarItem();
@@ -108,6 +109,12 @@ export default class VaultSync extends Plugin {
   async syncNow() {
     this.clearDebounce();
     await this.sync();
+  }
+
+  async pullNow() {
+    new Notice("Vault Sync: pulling…");
+    await this.pull();
+    new Notice("Vault Sync: pull done");
   }
 
   // ─── Internal ──────────────────────────────────────────────────────────────
@@ -183,6 +190,7 @@ export default class VaultSync extends Plugin {
         this.formatDateTime(new Date())
       );
       await git(cwd, ["commit", "-m", msg]);
+      await git(cwd, ["pull", "--rebase", "origin", this.settings.branch]);
       await git(cwd, ["push", "origin", this.settings.branch]);
 
       this.lastSyncedAt = new Date();
@@ -205,7 +213,7 @@ export default class VaultSync extends Plugin {
     }
   }
 
-  private isPaused(): boolean {
+  isPaused(): boolean {
     return this.pausedUntil !== null && new Date() < this.pausedUntil;
   }
 
@@ -273,6 +281,55 @@ export default class VaultSync extends Plugin {
 
   async saveSettings() {
     await this.saveData(this.settings);
+  }
+}
+
+// ─── Actions modal ───────────────────────────────────────────────────────────
+
+interface SyncAction {
+  label: string;
+  run: () => void;
+}
+
+class VaultSyncActionsModal extends SuggestModal<SyncAction> {
+  private plugin: VaultSync;
+
+  constructor(app: App, plugin: VaultSync) {
+    super(app);
+    this.plugin = plugin;
+    this.setPlaceholder("Vault Sync — choose an action");
+  }
+
+  getSuggestions(): SyncAction[] {
+    const p = this.plugin;
+    const actions: SyncAction[] = [
+      { label: "Sync now — commit & push immediately", run: () => p.syncNow() },
+      { label: "Pull — fetch latest from remote", run: () => p.pullNow() },
+      {
+        label: p.settings.enabled ? "Disable auto-sync" : "Enable auto-sync",
+        run: () => p.toggleEnabled(),
+      },
+    ];
+
+    if (p.isPaused()) {
+      actions.push({ label: "Resume sync", run: () => p.resume() });
+    } else {
+      actions.push(
+        { label: "Pause for 30 minutes", run: () => p.pause(30 * 60 * 1000) },
+        { label: "Pause for 1 hour", run: () => p.pause(60 * 60 * 1000) },
+        { label: "Pause for 2 hours", run: () => p.pause(2 * 60 * 60 * 1000) }
+      );
+    }
+
+    return actions;
+  }
+
+  renderSuggestion(action: SyncAction, el: HTMLElement) {
+    el.createEl("div", { text: action.label });
+  }
+
+  onChooseSuggestion(action: SyncAction) {
+    action.run();
   }
 }
 
