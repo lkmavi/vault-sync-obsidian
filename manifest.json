@@ -1,8 +1,8 @@
 {
-  "id": "vault-sync",
+  "id": "lkmavi-vault-sync",
   "name": "Vault Sync",
-  "version": "1.0.0",
-  "minAppVersion": "1.4.0",
+  "version": "1.4.2",
+  "minAppVersion": "1.4.1",
   "description": "Auto git sync — commit & push on every save",
   "author": "lkmavi",
   "authorUrl": "https://github.com/lkmavi",
