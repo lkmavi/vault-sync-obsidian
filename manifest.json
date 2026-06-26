@@ -1,6 +1,6 @@
 {
-  "id": "lkmavi-vault-git-sync",
-  "name": "Vault Git Sync",
+  "id": "lkmavi-vault-auto-git",
+  "name": "Vault Auto Git",
   "version": "1.4.2",
   "minAppVersion": "1.4.1",
   "description": "Auto git sync — commit & push on every save",
