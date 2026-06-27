@@ -9,7 +9,8 @@ import {
   TextComponent,
 } from "obsidian";
 import { execFile } from "child_process";
-import type { Server } from "http";
+import { createServer } from "node:http";
+import type { Server } from "node:http";
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,10 @@ function git(cwd: string, args: string[]): Promise<string> {
   });
 }
 
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 // ─── Plugin ──────────────────────────────────────────────────────────────────
 
 export default class VaultSync extends Plugin {
@@ -61,12 +66,12 @@ export default class VaultSync extends Plugin {
 
   private statusBarEl: HTMLElement;
   private ribbonEl: HTMLElement;
-  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private pauseTimer: ReturnType<typeof setTimeout> | null = null;
+  private debounceTimer = 0;
+  private pauseTimer = 0;
   private pausedUntil: Date | null = null;
   private syncing = false;
   private lastSyncedAt: Date | null = null;
-  private pullIntervalTimer: ReturnType<typeof setInterval> | null = null;
+  private pullIntervalTimer = 0;
   private webhookServer: Server | null = null;
 
   async onload() {
@@ -74,7 +79,7 @@ export default class VaultSync extends Plugin {
 
     this.ribbonEl = this.addRibbonIcon(
       this.settings.enabled ? "cloud-upload" : "cloud-off",
-      "Vault Sync",
+      "Smart Git Sync",
       () => new VaultSyncActionsModal(this.app, this).open()
     );
 
@@ -95,7 +100,7 @@ export default class VaultSync extends Plugin {
 
   onunload() {
     this.clearDebounce();
-    if (this.pauseTimer) clearTimeout(this.pauseTimer);
+    if (this.pauseTimer) window.clearTimeout(this.pauseTimer);
     this.stopPollInterval();
     this.stopWebhookServer();
   }
@@ -107,24 +112,24 @@ export default class VaultSync extends Plugin {
     await this.saveSettings();
     this.setRibbonIcon(this.settings.enabled ? "cloud-upload" : "cloud-off");
     this.refreshStatusBar();
-    new Notice(`Vault Sync ${this.settings.enabled ? "enabled" : "disabled"}`);
+    new Notice(`Smart Git Sync ${this.settings.enabled ? "enabled" : "disabled"}`);
     this.startPollInterval();
   }
 
   pause(ms: number) {
-    if (this.pauseTimer) clearTimeout(this.pauseTimer);
+    if (this.pauseTimer) window.clearTimeout(this.pauseTimer);
     this.pausedUntil = new Date(Date.now() + ms);
-    this.pauseTimer = setTimeout(() => this.resume(), ms);
+    this.pauseTimer = window.setTimeout(() => this.resume(), ms);
     this.clearDebounce();
     this.refreshStatusBar();
-    new Notice(`Vault Sync paused until ${this.formatTime(this.pausedUntil)}`);
+    new Notice(`Smart Git Sync paused until ${this.formatTime(this.pausedUntil)}`);
   }
 
   resume() {
-    if (this.pauseTimer) clearTimeout(this.pauseTimer);
+    if (this.pauseTimer) window.clearTimeout(this.pauseTimer);
     this.pausedUntil = null;
     this.refreshStatusBar();
-    new Notice("Vault Sync resumed");
+    new Notice("Smart Git Sync resumed");
   }
 
   async syncNow() {
@@ -133,13 +138,13 @@ export default class VaultSync extends Plugin {
   }
 
   async pullNow() {
-    new Notice("Vault Sync: checking remote…");
+    new Notice("Smart Git Sync: checking remote…");
     try {
       const updated = await this.fetchAndPullIfBehind();
-      new Notice(updated ? "Vault Sync: pulled new changes" : "Vault Sync: already up to date");
+      new Notice(updated ? "Smart Git Sync: pulled new changes" : "Smart Git Sync: already up to date");
       if (updated) this.refreshStatusBar("synced");
     } catch (err) {
-      new Notice(`Vault Sync pull failed:\n${(err as Error).message}`, 6000);
+      new Notice(`Smart Git Sync pull failed:\n${errMsg(err)}`, 6000);
       this.refreshStatusBar("error");
     }
   }
@@ -148,9 +153,9 @@ export default class VaultSync extends Plugin {
     const cwd = this.vaultPath();
     try {
       await git(cwd, ["init"]);
-      new Notice("Vault Sync: git repository initialised");
+      new Notice("Smart Git Sync: git repository initialised");
     } catch (err) {
-      new Notice(`Git init failed:\n${(err as Error).message}`, 6000);
+      new Notice(`Git init failed:\n${errMsg(err)}`, 6000);
     }
   }
 
@@ -165,42 +170,26 @@ export default class VaultSync extends Plugin {
       }
       new Notice(`Remote origin → ${url.trim()}`);
     } catch (err) {
-      new Notice(`Failed to set remote:\n${(err as Error).message}`, 6000);
+      new Notice(`Failed to set remote:\n${errMsg(err)}`, 6000);
     }
   }
 
   async generateGitignore() {
     const adapter = this.app.vault.adapter as FileSystemAdapter;
+    const configDir = this.app.vault.configDir;
     const sections: string[] = [];
 
     if (this.settings.gitignoreObsidian) {
-      sections.push("# Obsidian\n.obsidian/\n");
+      sections.push(`# Obsidian\n${configDir}/\n`);
     }
-
     if (this.settings.gitignoreOS) {
-      sections.push(
-        "# OS\n" +
-        ".DS_Store\n" +
-        "Thumbs.db\n" +
-        "desktop.ini\n" +
-        "ehthumbs.db\n"
-      );
+      sections.push("# OS\n.DS_Store\nThumbs.db\ndesktop.ini\nehthumbs.db\n");
     }
-
     if (this.settings.gitignoreIDE) {
-      sections.push(
-        "# IDE\n" +
-        ".idea/\n" +
-        ".vscode/\n" +
-        "*.iml\n" +
-        ".fleet/\n"
-      );
+      sections.push("# IDE\n.idea/\n.vscode/\n*.iml\n.fleet/\n");
     }
-
     const extra = this.settings.gitignoreExtra.trim();
-    if (extra) {
-      sections.push("# Custom\n" + extra + "\n");
-    }
+    if (extra) sections.push(`# Custom\n${extra}\n`);
 
     const content = sections.join("\n");
     const exists = await adapter.exists(".gitignore");
@@ -214,13 +203,16 @@ export default class VaultSync extends Plugin {
     this.stopPollInterval();
     const ms = this.settings.pullIntervalSeconds * 1000;
     if (!this.settings.enabled || ms <= 0) return;
-    this.pullIntervalTimer = setInterval(() => this.scheduledPull(), ms);
+    this.pullIntervalTimer = window.setInterval(
+      () => { void this.scheduledPull(); },
+      ms
+    );
   }
 
   stopPollInterval() {
     if (this.pullIntervalTimer) {
-      clearInterval(this.pullIntervalTimer);
-      this.pullIntervalTimer = null;
+      window.clearInterval(this.pullIntervalTimer);
+      this.pullIntervalTimer = 0;
     }
   }
 
@@ -229,11 +221,11 @@ export default class VaultSync extends Plugin {
     try {
       const updated = await this.fetchAndPullIfBehind();
       if (updated) {
-        new Notice("Vault Sync: pulled new changes from remote");
+        new Notice("Smart Git Sync: pulled new changes from remote");
         this.refreshStatusBar("synced");
       }
     } catch (err) {
-      console.error("[VaultSync] scheduled pull failed", err);
+      console.error("[SmartGitSync] scheduled pull failed", err);
       this.refreshStatusBar("error");
     }
   }
@@ -245,10 +237,7 @@ export default class VaultSync extends Plugin {
     const port = this.settings.webhookPort;
     if (!port || port < 1 || port > 65535) return;
 
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const http = require("node:http") as typeof import("http");
-
-    this.webhookServer = http.createServer((req, res) => {
+    this.webhookServer = createServer((req, res) => {
       if (req.method !== "POST") { res.writeHead(405).end(); return; }
 
       const secret = this.settings.webhookSecret;
@@ -258,16 +247,16 @@ export default class VaultSync extends Plugin {
       }
 
       res.writeHead(202).end("ok");
-      this.pullNow();
+      void this.pullNow();
     });
 
     this.webhookServer.on("error", (err: Error) => {
-      console.error("[VaultSync] webhook error", err);
-      new Notice(`Vault Sync webhook error: ${err.message}`, 6000);
+      console.error("[SmartGitSync] webhook error", err);
+      new Notice(`Smart Git Sync webhook error: ${err.message}`, 6000);
     });
 
     this.webhookServer.listen(port, "127.0.0.1", () => {
-      console.log(`[VaultSync] webhook listening on 127.0.0.1:${port}`);
+      console.log(`[SmartGitSync] webhook listening on 127.0.0.1:${port}`);
     });
   }
 
@@ -281,9 +270,9 @@ export default class VaultSync extends Plugin {
   // ─── Internal ──────────────────────────────────────────────────────────────
 
   private registerCommands() {
-    this.addCommand({ id: "toggle",    name: "Toggle auto-sync on/off",  callback: () => this.toggleEnabled() });
-    this.addCommand({ id: "sync-now",  name: "Sync now",                  callback: () => this.syncNow() });
-    this.addCommand({ id: "pull-now",  name: "Pull from remote",          callback: () => this.pullNow() });
+    this.addCommand({ id: "toggle",    name: "Toggle auto-sync on/off",  callback: () => { void this.toggleEnabled(); } });
+    this.addCommand({ id: "sync-now",  name: "Sync now",                  callback: () => { void this.syncNow(); } });
+    this.addCommand({ id: "pull-now",  name: "Pull from remote",          callback: () => { void this.pullNow(); } });
     this.addCommand({ id: "pause-30m", name: "Pause for 30 minutes",      callback: () => this.pause(30 * 60 * 1000) });
     this.addCommand({ id: "pause-1h",  name: "Pause for 1 hour",          callback: () => this.pause(60 * 60 * 1000) });
     this.addCommand({ id: "pause-2h",  name: "Pause for 2 hours",         callback: () => this.pause(2 * 60 * 60 * 1000) });
@@ -300,10 +289,10 @@ export default class VaultSync extends Plugin {
 
   private onVaultChange() {
     if (!this.settings.enabled || this.isPaused()) return;
-    if (this.settings.debounceSeconds === 0) return; // 0 = auto-push disabled
+    if (this.settings.debounceSeconds === 0) return;
     this.clearDebounce();
-    this.debounceTimer = setTimeout(
-      () => this.sync(),
+    this.debounceTimer = window.setTimeout(
+      () => { void this.sync(); },
       this.settings.debounceSeconds * 1000
     );
     this.refreshStatusBar("pending");
@@ -323,23 +312,20 @@ export default class VaultSync extends Plugin {
 
       const msg = this.settings.commitTemplate.replace("{date}", this.formatDateTime(new Date()));
       await git(cwd, ["commit", "-m", msg]);
-
-      // absorb any remote commits before pushing
       await git(cwd, ["pull", "--rebase", "origin", this.settings.branch]);
       await git(cwd, ["push", "origin", this.settings.branch]);
 
       this.lastSyncedAt = new Date();
       this.refreshStatusBar("synced");
     } catch (err) {
-      console.error("[VaultSync]", err);
-      new Notice(`Vault Sync failed:\n${(err as Error).message}`, 8000);
+      console.error("[SmartGitSync]", err);
+      new Notice(`Smart Git Sync failed:\n${errMsg(err)}`, 8000);
       this.refreshStatusBar("error");
     } finally {
       this.syncing = false;
     }
   }
 
-  // fetch updates origin/<branch> ref, then pull only if we're behind
   private async fetchAndPullIfBehind(): Promise<boolean> {
     const cwd = this.vaultPath();
     await git(cwd, ["fetch", "origin", this.settings.branch]);
@@ -355,19 +341,22 @@ export default class VaultSync extends Plugin {
   }
 
   private clearDebounce() {
-    if (this.debounceTimer) { clearTimeout(this.debounceTimer); this.debounceTimer = null; }
+    if (this.debounceTimer) {
+      window.clearTimeout(this.debounceTimer);
+      this.debounceTimer = 0;
+    }
   }
 
   private vaultPath(): string {
     const adapter = this.app.vault.adapter;
     if (adapter instanceof FileSystemAdapter) return adapter.getBasePath();
-    throw new Error("VaultSync requires a local vault");
+    throw new Error("Smart Git Sync requires a local vault");
   }
 
   private setRibbonIcon(icon: string) {
     this.ribbonEl.empty();
-    (this.ribbonEl as any).dataset.icon = icon;
-    this.ribbonEl.setAttribute("aria-label", `Vault Sync (${this.settings.enabled ? "on" : "off"})`);
+    this.ribbonEl.dataset["icon"] = icon;
+    this.ribbonEl.setAttribute("aria-label", `Smart Git Sync (${this.settings.enabled ? "on" : "off"})`);
   }
 
   private refreshStatusBar(state?: "pending" | "syncing" | "synced" | "error") {
@@ -394,10 +383,9 @@ export default class VaultSync extends Plugin {
   }
 
   async loadSettings() {
-    const data = await this.loadData() ?? {};
-    // migrate old pullIntervalMinutes → pullIntervalSeconds
+    const data = (await this.loadData()) ?? {};
     if (data.pullIntervalMinutes !== undefined && data.pullIntervalSeconds === undefined) {
-      data.pullIntervalSeconds = data.pullIntervalMinutes * 60;
+      data.pullIntervalSeconds = (data.pullIntervalMinutes as number) * 60;
       delete data.pullIntervalMinutes;
     }
     this.settings = Object.assign({}, DEFAULTS, data);
@@ -418,17 +406,17 @@ class VaultSyncActionsModal extends SuggestModal<SyncAction> {
   constructor(app: App, plugin: VaultSync) {
     super(app);
     this.plugin = plugin;
-    this.setPlaceholder("Vault Sync — choose an action");
+    this.setPlaceholder("Smart Git Sync — choose an action");
   }
 
   getSuggestions(): SyncAction[] {
     const p = this.plugin;
     const actions: SyncAction[] = [
-      { label: "Sync now — commit & push immediately", run: () => p.syncNow() },
-      { label: "Pull — fetch & pull if behind",        run: () => p.pullNow() },
+      { label: "Sync now — commit & push immediately", run: () => { void p.syncNow(); } },
+      { label: "Pull — fetch & pull if behind",        run: () => { void p.pullNow(); } },
       {
         label: p.settings.enabled ? "Disable auto-sync" : "Enable auto-sync",
-        run: () => p.toggleEnabled(),
+        run: () => { void p.toggleEnabled(); },
       },
     ];
 
@@ -466,7 +454,8 @@ class VaultSyncSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Vault Sync" });
+
+    new Setting(containerEl).setName("Smart Git Sync").setHeading();
 
     // ── Sync ──────────────────────────────────────────────────────────────
 
@@ -474,9 +463,9 @@ class VaultSyncSettingTab extends PluginSettingTab {
       .setName("Auto-sync")
       .setDesc("Automatically commit and push on every save")
       .addToggle((t) =>
-        t.setValue(this.plugin.settings.enabled).onChange(async (v) => {
+        t.setValue(this.plugin.settings.enabled).onChange((v) => {
           this.plugin.settings.enabled = v;
-          await this.plugin.saveSettings();
+          void this.plugin.saveSettings();
           this.plugin.startPollInterval();
         })
       );
@@ -485,31 +474,31 @@ class VaultSyncSettingTab extends PluginSettingTab {
       .setName("Pull on startup")
       .setDesc("Fetch and pull if behind when Obsidian opens")
       .addToggle((t) =>
-        t.setValue(this.plugin.settings.pullOnStartup).onChange(async (v) => {
+        t.setValue(this.plugin.settings.pullOnStartup).onChange((v) => {
           this.plugin.settings.pullOnStartup = v;
-          await this.plugin.saveSettings();
+          void this.plugin.saveSettings();
         })
       );
 
     this.addDurationSetting(
       containerEl,
       "Push debounce",
-      "Wait this long after the last file change before committing and pushing",
+      "Wait this long after the last file change before committing. 0 m 0 s = disabled.",
       this.plugin.settings.debounceSeconds,
-      async (secs) => {
+      (secs) => {
         this.plugin.settings.debounceSeconds = secs;
-        await this.plugin.saveSettings();
+        void this.plugin.saveSettings();
       }
     );
 
     this.addDurationSetting(
       containerEl,
       "Pull interval",
-      "How often to fetch and pull remote changes. 0 = disabled.",
+      "How often to fetch and pull remote changes. 0 m 0 s = disabled.",
       this.plugin.settings.pullIntervalSeconds,
-      async (secs) => {
+      (secs) => {
         this.plugin.settings.pullIntervalSeconds = secs;
-        await this.plugin.saveSettings();
+        void this.plugin.saveSettings();
         this.plugin.startPollInterval();
       }
     );
@@ -521,30 +510,30 @@ class VaultSyncSettingTab extends PluginSettingTab {
         t
           .setPlaceholder("auto: sync {date}")
           .setValue(this.plugin.settings.commitTemplate)
-          .onChange(async (v) => {
+          .onChange((v) => {
             this.plugin.settings.commitTemplate = v;
-            await this.plugin.saveSettings();
+            void this.plugin.saveSettings();
           })
       );
 
     new Setting(containerEl)
       .setName("Branch")
       .addText((t) =>
-        t.setValue(this.plugin.settings.branch).onChange(async (v) => {
+        t.setValue(this.plugin.settings.branch).onChange((v) => {
           this.plugin.settings.branch = v.trim();
-          await this.plugin.saveSettings();
+          void this.plugin.saveSettings();
         })
       );
 
     // ── Repository setup ──────────────────────────────────────────────────
 
-    containerEl.createEl("h3", { text: "Repository setup" });
+    new Setting(containerEl).setName("Repository setup").setHeading();
 
     new Setting(containerEl)
       .setName("Initialise git repo")
       .setDesc("Run git init in the vault directory")
       .addButton((b) =>
-        b.setButtonText("git init").onClick(() => this.plugin.initRepo())
+        b.setButtonText("git init").onClick(() => { void this.plugin.initRepo(); })
       );
 
     let remoteUrlInput = "";
@@ -557,24 +546,26 @@ class VaultSyncSettingTab extends PluginSettingTab {
           .onChange((v) => { remoteUrlInput = v; })
       )
       .addButton((b) =>
-        b.setButtonText("Set remote").setCta().onClick(() => this.plugin.setRemote(remoteUrlInput))
+        b.setButtonText("Set remote").setCta().onClick(() => { void this.plugin.setRemote(remoteUrlInput); })
       );
 
     // ── .gitignore ────────────────────────────────────────────────────────
 
-    containerEl.createEl("h3", { text: ".gitignore" });
+    new Setting(containerEl).setName(".gitignore").setHeading();
     containerEl.createEl("p", {
       text: "Generate a .gitignore in the vault root. Existing file will be overwritten.",
       cls: "setting-item-description",
     });
 
+    const configDir = this.plugin.app.vault.configDir;
+
     new Setting(containerEl)
-      .setName("Ignore .obsidian/")
+      .setName(`Ignore ${configDir}/`)
       .setDesc("Obsidian workspace and config files")
       .addToggle((t) =>
-        t.setValue(this.plugin.settings.gitignoreObsidian).onChange(async (v) => {
+        t.setValue(this.plugin.settings.gitignoreObsidian).onChange((v) => {
           this.plugin.settings.gitignoreObsidian = v;
-          await this.plugin.saveSettings();
+          void this.plugin.saveSettings();
         })
       );
 
@@ -582,9 +573,9 @@ class VaultSyncSettingTab extends PluginSettingTab {
       .setName("Ignore OS files")
       .setDesc(".DS_Store, Thumbs.db, desktop.ini…")
       .addToggle((t) =>
-        t.setValue(this.plugin.settings.gitignoreOS).onChange(async (v) => {
+        t.setValue(this.plugin.settings.gitignoreOS).onChange((v) => {
           this.plugin.settings.gitignoreOS = v;
-          await this.plugin.saveSettings();
+          void this.plugin.saveSettings();
         })
       );
 
@@ -592,9 +583,9 @@ class VaultSyncSettingTab extends PluginSettingTab {
       .setName("Ignore IDE files")
       .setDesc(".idea/, .vscode/, *.iml, .fleet/…")
       .addToggle((t) =>
-        t.setValue(this.plugin.settings.gitignoreIDE).onChange(async (v) => {
+        t.setValue(this.plugin.settings.gitignoreIDE).onChange((v) => {
           this.plugin.settings.gitignoreIDE = v;
-          await this.plugin.saveSettings();
+          void this.plugin.saveSettings();
         })
       );
 
@@ -605,10 +596,10 @@ class VaultSyncSettingTab extends PluginSettingTab {
         t.setPlaceholder("*.log\nsecrets.md\n…");
         t.setValue(this.plugin.settings.gitignoreExtra);
         t.inputEl.rows = 4;
-        t.inputEl.style.width = "100%";
-        t.onChange(async (v) => {
+        t.inputEl.setCssStyles({ width: "100%" });
+        t.onChange((v) => {
           this.plugin.settings.gitignoreExtra = v;
-          await this.plugin.saveSettings();
+          void this.plugin.saveSettings();
         });
         return t;
       });
@@ -618,12 +609,12 @@ class VaultSyncSettingTab extends PluginSettingTab {
         b
           .setButtonText("Generate .gitignore")
           .setCta()
-          .onClick(() => this.plugin.generateGitignore())
+          .onClick(() => { void this.plugin.generateGitignore(); })
       );
 
     // ── Webhook ───────────────────────────────────────────────────────────
 
-    containerEl.createEl("h3", { text: "Webhook" });
+    new Setting(containerEl).setName("Webhook").setHeading();
     containerEl.createEl("p", {
       text: "Starts a local HTTP server. POST /sync triggers an immediate fetch + pull. " +
             "Use Tailscale / cloudflared / ngrok to expose it for GitHub Actions.",
@@ -637,9 +628,9 @@ class VaultSyncSettingTab extends PluginSettingTab {
         t
           .setPlaceholder("0")
           .setValue(String(this.plugin.settings.webhookPort))
-          .onChange(async (v) => {
+          .onChange((v) => {
             this.plugin.settings.webhookPort = parseInt(v) || 0;
-            await this.plugin.saveSettings();
+            void this.plugin.saveSettings();
             this.plugin.startWebhookServer();
           })
       );
@@ -651,9 +642,9 @@ class VaultSyncSettingTab extends PluginSettingTab {
         t
           .setPlaceholder("leave empty to disable auth")
           .setValue(this.plugin.settings.webhookSecret)
-          .onChange(async (v) => {
+          .onChange((v) => {
             this.plugin.settings.webhookSecret = v;
-            await this.plugin.saveSettings();
+            void this.plugin.saveSettings();
           })
       );
 
@@ -662,26 +653,28 @@ class VaultSyncSettingTab extends PluginSettingTab {
       .setDesc("Detect your Tailscale IP to get a ready-to-use webhook URL.")
       .addText((t) => {
         this.webhookUrlText = t;
-        t.inputEl.style.width = "280px";
+        t.inputEl.setCssStyles({ width: "280px" });
         t.setPlaceholder("click Detect →");
         t.inputEl.readOnly = true;
         return t;
       })
       .addButton((b) =>
-        b.setButtonText("Detect").onClick(async () => {
-          const ip = await this.detectTailscaleIP();
-          if (!ip) { new Notice("Tailscale not found — is it installed and running?"); return; }
-          const port = this.plugin.settings.webhookPort;
-          if (!port) { new Notice("Set a Webhook port first"); return; }
-          this.webhookUrlText.setValue(`http://${ip}:${port}/sync`);
-          new Notice(`Tailscale IP detected: ${ip}`);
+        b.setButtonText("Detect").onClick(() => {
+          void (async () => {
+            const ip = await this.detectTailscaleIP();
+            if (!ip) { new Notice("Tailscale not found — is it installed and running?"); return; }
+            const port = this.plugin.settings.webhookPort;
+            if (!port) { new Notice("Set a Webhook port first"); return; }
+            this.webhookUrlText.setValue(`http://${ip}:${port}/sync`);
+            new Notice(`Tailscale IP detected: ${ip}`);
+          })();
         })
       )
       .addButton((b) =>
         b.setButtonText("Copy URL").onClick(() => {
           const url = this.webhookUrlText.getValue();
           if (!url) { new Notice("Detect Tailscale IP first"); return; }
-          navigator.clipboard.writeText(url);
+          void navigator.clipboard.writeText(url);
           new Notice("URL copied to clipboard");
         })
       );
@@ -698,18 +691,18 @@ class VaultSyncSettingTab extends PluginSettingTab {
             ? `              -H "Authorization: Bearer \${{ secrets.VAULT_WEBHOOK_SECRET }}" \\\n`
             : "";
           const yaml =
-`        - name: Notify Vault Sync
+`        - name: Notify Smart Git Sync
           run: |
             curl -fsS -X POST \\
 ${authLine}              ${url}`;
-          navigator.clipboard.writeText(yaml);
+          void navigator.clipboard.writeText(yaml);
           new Notice("GitHub Actions step copied to clipboard");
         })
       );
 
     // ── Pause ─────────────────────────────────────────────────────────────
 
-    containerEl.createEl("h3", { text: "Pause" });
+    new Setting(containerEl).setName("Pause").setHeading();
 
     new Setting(containerEl)
       .setName("Pause sync temporarily")
@@ -720,17 +713,17 @@ ${authLine}              ${url}`;
 
     // ── Manual ────────────────────────────────────────────────────────────
 
-    containerEl.createEl("h3", { text: "Manual" });
+    new Setting(containerEl).setName("Manual").setHeading();
 
     new Setting(containerEl)
       .setName("Sync now")
       .setDesc("Commit and push immediately")
-      .addButton((b) => b.setButtonText("Sync now").setCta().onClick(() => this.plugin.syncNow()));
+      .addButton((b) => b.setButtonText("Sync now").setCta().onClick(() => { void this.plugin.syncNow(); }));
 
     new Setting(containerEl)
       .setName("Pull now")
       .setDesc("Fetch and pull if behind")
-      .addButton((b) => b.setButtonText("Pull").onClick(() => this.plugin.pullNow()));
+      .addButton((b) => b.setButtonText("Pull").onClick(() => { void this.plugin.pullNow(); }));
 
     this.renderGuide(containerEl);
   }
@@ -742,7 +735,7 @@ ${authLine}              ${url}`;
     name: string,
     desc: string,
     totalSeconds: number,
-    onSave: (seconds: number) => Promise<void>
+    onSave: (seconds: number) => void
   ) {
     let mins = Math.floor(totalSeconds / 60);
     let secs = totalSeconds % 60;
@@ -752,12 +745,11 @@ ${authLine}              ${url}`;
     setting.addText((t) => {
       t.inputEl.type = "number";
       t.inputEl.min = "0";
-      t.inputEl.style.width = "55px";
-      t.inputEl.style.textAlign = "center";
+      t.inputEl.setCssStyles({ width: "55px", textAlign: "center" });
       t.setValue(String(mins));
-      t.onChange(async (v) => {
+      t.onChange((v) => {
         mins = Math.max(0, parseInt(v) || 0);
-        await onSave(mins * 60 + secs);
+        onSave(mins * 60 + secs);
       });
       return t;
     });
@@ -768,12 +760,11 @@ ${authLine}              ${url}`;
       t.inputEl.type = "number";
       t.inputEl.min = "0";
       t.inputEl.max = "59";
-      t.inputEl.style.width = "55px";
-      t.inputEl.style.textAlign = "center";
+      t.inputEl.setCssStyles({ width: "55px", textAlign: "center" });
       t.setValue(String(secs));
-      t.onChange(async (v) => {
+      t.onChange((v) => {
         secs = Math.max(0, Math.min(59, parseInt(v) || 0));
-        await onSave(mins * 60 + secs);
+        onSave(mins * 60 + secs);
       });
       return t;
     });
@@ -787,7 +778,7 @@ ${authLine}              ${url}`;
     return new Promise((resolve) => {
       execFile("tailscale", ["ip", "-4"], {}, (err, stdout) => {
         if (err) resolve(null);
-        else resolve(stdout.trim().split("\n")[0] || null);
+        else resolve(stdout.trim().split("\n")[0] ?? null);
       });
     });
   }
@@ -795,7 +786,7 @@ ${authLine}              ${url}`;
   // ─── Setup guide ────────────────────────────────────────────────────────
 
   private renderGuide(containerEl: HTMLElement) {
-    containerEl.createEl("h3", { text: "Setup guide" });
+    new Setting(containerEl).setName("Setup guide").setHeading();
 
     this.guide(containerEl, "First-time setup", `
 If your vault is not yet a git repo:
@@ -808,8 +799,8 @@ If your vault is not yet a git repo:
        git add . && git commit -m "init" && git push -u origin main
   6. Enable Auto-sync — the plugin takes over from here.
 
-Tip: if you don't want to sync your Obsidian settings across devices,
-keep "Ignore .obsidian/" on. If you do want shared settings, turn it off.`);
+Tip: keep "Ignore ${this.plugin.app.vault.configDir}/" on if you don't want to sync
+Obsidian settings across devices; turn it off if you do.`);
 
     this.guide(containerEl, "How sync works", `
 Auto-sync and Pull interval are off by default — enable them once your
@@ -842,7 +833,7 @@ The fetch itself is read-only and does not touch your working tree.`);
 
     this.guide(containerEl, "Webhook — local trigger", `
 Set a Webhook port (e.g. 27123) to start a local HTTP server.
-POST /sync triggers an immediate fetch + pull (same logic as the interval).
+POST /sync triggers an immediate fetch + pull.
 
   curl -X POST http://127.0.0.1:27123/sync
 
@@ -875,7 +866,7 @@ Full workflow (.github/workflows/notify-vault.yml):
           with:
             authkey: \${{ secrets.TAILSCALE_AUTHKEY }}
 
-        - name: Notify Vault Sync
+        - name: Notify Smart Git Sync
           run: |
             curl -fsS -X POST \\
               -H "Authorization: Bearer \${{ secrets.VAULT_WEBHOOK_SECRET }}" \\
@@ -890,7 +881,7 @@ If you don't use Tailscale, expose the port with a tunnel:
 
 Copy the generated public URL, save as VAULT_WEBHOOK_URL in repo secrets:
 
-  - name: Notify Vault Sync
+  - name: Notify Smart Git Sync
     run: |
       curl -fsS -X POST \\
         -H "Authorization: Bearer \${{ secrets.VAULT_WEBHOOK_SECRET }}" \\
@@ -902,16 +893,21 @@ named tunnel. For a stable URL, Tailscale is the better choice.`);
 
   private guide(containerEl: HTMLElement, title: string, body: string) {
     const details = containerEl.createEl("details");
-    details.style.marginBottom = "8px";
+    details.setCssStyles({ marginBottom: "8px" });
     const summary = details.createEl("summary");
-    summary.style.cursor = "pointer";
-    summary.style.fontWeight = "500";
+    summary.setCssStyles({ cursor: "pointer", fontWeight: "500" });
     summary.setText(title);
     const pre = details.createEl("pre");
-    pre.style.cssText =
-      "font-size:12px;line-height:1.5;padding:10px 12px;" +
-      "background:var(--background-secondary);border-radius:6px;" +
-      "overflow-x:auto;white-space:pre-wrap;margin-top:6px";
+    pre.setCssStyles({
+      fontSize: "12px",
+      lineHeight: "1.5",
+      padding: "10px 12px",
+      background: "var(--background-secondary)",
+      borderRadius: "6px",
+      overflowX: "auto",
+      whiteSpace: "pre-wrap",
+      marginTop: "6px",
+    });
     pre.setText(body.trim());
   }
 }

@@ -1,7 +1,7 @@
 {
   "id": "lkmavi-smart-git-sync",
   "name": "Smart Git Sync",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "minAppVersion": "1.4.1",
   "description": "Auto git sync — commit & push on every save.",
   "author": "lkmavi",

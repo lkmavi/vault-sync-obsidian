@@ -18,7 +18,7 @@ Obsidian plugin that keeps your vault in sync with a Git remote. Every save trig
 
 ## Installation
 
-1. Copy `main.js` and `manifest.json` into `.obsidian/plugins/vault-sync/`
+1. Copy `main.js` and `manifest.json` into `.obsidian/plugins/lkmavi-smart-git-sync/`
 2. Enable the plugin in **Settings → Community plugins**
 
 ## First-time setup
@@ -113,7 +113,7 @@ jobs:
         with:
           authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
 
-      - name: Notify Vault Sync
+      - name: Notify Smart Git Sync
         run: |
           curl -fsS -X POST \
             -H "Authorization: Bearer ${{ secrets.VAULT_WEBHOOK_SECRET }}" \
@@ -129,7 +129,7 @@ cloudflared tunnel --url http://127.0.0.1:<port>
 Copy the generated `*.trycloudflare.com` URL, add it as `VAULT_WEBHOOK_URL` in your repo secrets, then:
 
 ```yaml
-- name: Notify Vault Sync
+- name: Notify Smart Git Sync
   run: |
     curl -fsS -X POST \
       -H "Authorization: Bearer ${{ secrets.VAULT_WEBHOOK_SECRET }}" \
