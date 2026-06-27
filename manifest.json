@@ -3,7 +3,7 @@
   "name": "Smart Git Sync",
   "version": "1.4.3",
   "minAppVersion": "1.4.1",
-  "description": "Auto git sync — commit & push on every save",
+  "description": "Auto git sync — commit & push on every save.",
   "author": "lkmavi",
   "authorUrl": "https://github.com/lkmavi",
   "isDesktopOnly": true

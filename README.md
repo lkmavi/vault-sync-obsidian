@@ -1,4 +1,4 @@
-# Vault Sync
+# Smart Git Sync
 
 Obsidian plugin that keeps your vault in sync with a Git remote. Every save triggers a debounced commit + push. Remote changes are pulled automatically on a configurable interval and can also be triggered on-demand via a local webhook.
 
