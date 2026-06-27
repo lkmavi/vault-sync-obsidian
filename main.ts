@@ -361,8 +361,8 @@ export default class VaultSync extends Plugin {
 
   private refreshStatusBar(state?: "pending" | "syncing" | "synced" | "error") {
     if (!this.settings.enabled) { this.statusBarEl.setText("sync: off"); return; }
-    if (this.isPaused()) {
-      this.statusBarEl.setText(`sync: paused until ${this.formatTime(this.pausedUntil!)}`);
+    if (this.isPaused() && this.pausedUntil) {
+      this.statusBarEl.setText(`sync: paused until ${this.formatTime(this.pausedUntil)}`);
       return;
     }
     switch (state) {
@@ -383,12 +383,11 @@ export default class VaultSync extends Plugin {
   }
 
   async loadSettings() {
-    const data = (await this.loadData()) ?? {};
-    if (data.pullIntervalMinutes !== undefined && data.pullIntervalSeconds === undefined) {
-      data.pullIntervalSeconds = (data.pullIntervalMinutes as number) * 60;
-      delete data.pullIntervalMinutes;
-    }
-    this.settings = Object.assign({}, DEFAULTS, data);
+    this.settings = Object.assign(
+      {} as VaultSyncSettings,
+      DEFAULTS,
+      (await this.loadData()) as Partial<VaultSyncSettings>
+    );
   }
 
   async saveSettings() {
@@ -454,8 +453,6 @@ class VaultSyncSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-
-    new Setting(containerEl).setName("Smart Git Sync").setHeading();
 
     // ── Sync ──────────────────────────────────────────────────────────────
 

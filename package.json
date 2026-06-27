@@ -1,6 +1,6 @@
 {
   "name": "vault-sync",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "private": true,
   "scripts": {
     "dev": "node esbuild.config.mjs",
